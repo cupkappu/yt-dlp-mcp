@@ -40,7 +40,7 @@ async function testWhisperInContainer() {
   return new Promise((resolve) => {
     const testProcess = spawn('docker', [
       'run', '--rm', 'yt-dlp-mcp-server:latest', 
-      'python3', '-m', 'whisper', '--help'
+      'sh', '-c', 'whisper --help | head -3'
     ], {
       stdio: ['pipe', 'pipe', 'pipe']
     });
@@ -142,7 +142,7 @@ async function testAudioTranscription() {
       'sh', '-c', 
       'cd /workspace && ' +
       'ffmpeg -f lavfi -i "sine=frequency=440:duration=1" -ar 16000 test.wav -y 2>/dev/null && ' +
-      'python3 -m whisper test.wav --model tiny --language en 2>/dev/null && ' +
+      'whisper test.wav --model tiny --language en 2>/dev/null && ' +
       'echo "Transcription completed"'
     ], {
       stdio: ['pipe', 'pipe', 'pipe']

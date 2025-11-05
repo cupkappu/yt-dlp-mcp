@@ -6,8 +6,9 @@ A Model Context Protocol (MCP) server that provides tools for video downloading 
 
 - **extract_info**: Extract video information without downloading
 - **list_formats**: List available video formats and qualities
-- **download_video**: Download videos with customizable options and optional Whisper transcription
-- **transcribe_audio**: Transcribe audio files using OpenAI Whisper
+- **download_video**: Download videos with customizable options
+- **list_subtitles**: List all available subtitles (manual and auto-generated)
+- **download_subtitles**: Download subtitles and return content to the model
 
 ## Docker Usage (Recommended)
 
@@ -103,19 +104,67 @@ Download a video with specified options.
 - `output_path` (string, optional): Output file path (uses yt-dlp default if not specified)
 - `extract_audio` (boolean, optional): Extract audio only (default: false)
 - `audio_format` (string, optional): Audio format when extracting audio (mp3, m4a, etc.) (default: 'mp3')
-- `transcribe` (boolean, optional): Automatically transcribe audio using Whisper after download (default: false)
-- `whisper_model` (string, optional): Whisper model to use (tiny, base, small, medium, large) (default: 'base')
-- `transcribe_language` (string, optional): Language for transcription (optional, auto-detect if not specified)
 
-### transcribe_audio
-Transcribe an audio file using OpenAI Whisper.
+### list_subtitles
+List all available subtitles (both manual and auto-generated) for a video.
 
 **Parameters:**
-- `audio_path` (string, required): Path to the audio file to transcribe
-- `model` (string, optional): Whisper model to use (tiny, base, small, medium, large) (default: 'base')
-- `language` (string, optional): Language for transcription (optional, auto-detect if not specified)
-- `output_format` (string, optional): Output format (txt, srt, vtt, json) (default: 'txt')
-- `output_path` (string, optional): Output file path for transcription (optional)
+- `url` (string, required): Video URL to list subtitles for
+
+**Example Response:**
+```
+Available subtitles for dQw4w9WgXcQ:
+Language       Name
+en             English
+ja             Japanese
+zh-Hans        Chinese (Simplified)
+...
+
+Available automatic captions:
+Language       Name
+en             English
+de             German
+...
+```
+
+### download_subtitles
+Download subtitles and return the subtitle content to the model. Supports both manual and auto-generated subtitles.
+
+**Parameters:**
+- `url` (string, required): Video URL to download subtitles from
+- `languages` (string, optional): Comma-separated list of language codes (e.g., 'en,zh,ja') or 'all' for all available languages (default: 'en')
+- `auto_generated` (boolean, optional): Whether to download auto-generated subtitles if manual subtitles are not available (default: true)
+- `format` (string, optional): Subtitle format - srt, vtt, ttml, etc. (default: 'srt')
+
+**Example Usage:**
+```javascript
+// Download English subtitles only
+{
+  "url": "https://www.youtube.com/watch?v=VIDEO_ID",
+  "languages": "en",
+  "auto_generated": true,
+  "format": "srt"
+}
+
+// Download multiple languages
+{
+  "url": "https://www.youtube.com/watch?v=VIDEO_ID",
+  "languages": "en,zh,ja",
+  "auto_generated": true,
+  "format": "srt"
+}
+
+// Download all available subtitles
+{
+  "url": "https://www.youtube.com/watch?v=VIDEO_ID",
+  "languages": "all",
+  "auto_generated": true,
+  "format": "vtt"
+}
+```
+
+**Response:**
+The tool returns the complete subtitle content in the specified format, ready for the model to process and analyze.
 
 ## Docker Compose Configuration
 
@@ -132,9 +181,8 @@ The Docker container includes:
 
 - **ffmpeg**: For audio/video processing
 - **yt-dlp**: Latest version for video downloading
-- **OpenAI Whisper**: For audio transcription and speech recognition
 - **Node.js 18**: Runtime for the MCP server
-- **Python 3**: Required by yt-dlp and Whisper
+- **Python 3**: Required by yt-dlp
 
 ## Troubleshooting
 
@@ -156,43 +204,3 @@ docker logs yt-dlp-mcp
 ## Example
 
 The server has been tested with YouTube videos and successfully extracts detailed video information including formats, metadata, and download URLs.
-
-### Audio Transcription Examples
-
-**Download audio and transcribe automatically:**
-```json
-{
-  "tool": "download_video",
-  "arguments": {
-    "url": "https://example.com/video",
-    "extract_audio": true,
-    "audio_format": "mp3",
-    "transcribe": true,
-    "whisper_model": "base",
-    "transcribe_language": "en"
-  }
-}
-```
-
-**Transcribe an existing audio file:**
-```json
-{
-  "tool": "transcribe_audio",
-  "arguments": {
-    "audio_path": "/path/to/audio.mp3",
-    "model": "small",
-    "language": "zh",
-    "output_format": "srt"
-  }
-}
-```
-
-### Whisper Model Options
-
-- **tiny**: Fastest, least accurate (~39 MB)
-- **base**: Good balance of speed and accuracy (~74 MB)  
-- **small**: Better accuracy (~244 MB)
-- **medium**: High accuracy (~769 MB)
-- **large**: Best accuracy (~1550 MB)
-
-The model size affects both transcription quality and processing time. Choose based on your accuracy requirements and available resources.

@@ -11,8 +11,9 @@ import {
 import { spawn } from "child_process";
 import { promisify } from "util";
 import { exec as execCallback } from "child_process";
-import { existsSync } from "fs";
-import { extname, basename, dirname, join } from "path";
+import * as fs from "fs/promises";
+import * as path from "path";
+import * as os from "os";
 
 const exec = promisify(execCallback);
 
@@ -102,54 +103,51 @@ class YtDlpMcpServer {
                   description: "Audio format when extracting audio (mp3, m4a, etc.)",
                   default: "mp3",
                 },
-                transcribe: {
-                  type: "boolean",
-                  description: "Automatically transcribe audio using Whisper after download",
-                  default: false,
-                },
-                whisper_model: {
+              },
+              required: ["url"],
+            },
+          },
+          {
+            name: "list_subtitles",
+            description: "List all available subtitles (both manual and auto-generated) for a video",
+            inputSchema: {
+              type: "object",
+              properties: {
+                url: {
                   type: "string",
-                  description: "Whisper model to use (tiny, base, small, medium, large)",
-                  default: "base",
-                },
-                transcribe_language: {
-                  type: "string",
-                  description: "Language for transcription (optional, auto-detect if not specified)",
+                  description: "Video URL to list subtitles for",
                 },
               },
               required: ["url"],
             },
           },
           {
-            name: "transcribe_audio",
-            description: "Transcribe an audio file using OpenAI Whisper",
+            name: "download_subtitles",
+            description: "Download subtitles and return the content to the model. Supports both manual and auto-generated subtitles.",
             inputSchema: {
               type: "object",
               properties: {
-                audio_path: {
+                url: {
                   type: "string",
-                  description: "Path to the audio file to transcribe",
+                  description: "Video URL to download subtitles from",
                 },
-                model: {
+                languages: {
                   type: "string",
-                  description: "Whisper model to use (tiny, base, small, medium, large)",
-                  default: "base",
+                  description: "Comma-separated list of language codes (e.g., 'en,zh,ja') or 'all' for all available languages",
+                  default: "en",
                 },
-                language: {
-                  type: "string",
-                  description: "Language for transcription (optional, auto-detect if not specified)",
+                auto_generated: {
+                  type: "boolean",
+                  description: "Whether to download auto-generated subtitles if manual subtitles are not available",
+                  default: true,
                 },
-                output_format: {
+                format: {
                   type: "string",
-                  description: "Output format (txt, srt, vtt, json)",
-                  default: "txt",
-                },
-                output_path: {
-                  type: "string",
-                  description: "Output file path for transcription (optional)",
+                  description: "Subtitle format (srt, vtt, ttml, etc.)",
+                  default: "srt",
                 },
               },
-              required: ["audio_path"],
+              required: ["url"],
             },
           },
         ],
@@ -168,8 +166,10 @@ class YtDlpMcpServer {
             return await this.handleListFormats(args);
           case "download_video":
             return await this.handleDownloadVideo(args);
-          case "transcribe_audio":
-            return await this.handleTranscribeAudio(args);
+          case "list_subtitles":
+            return await this.handleListSubtitles(args);
+          case "download_subtitles":
+            return await this.handleDownloadSubtitles(args);
           default:
             throw new McpError(
               ErrorCode.MethodNotFound,
@@ -213,39 +213,6 @@ class YtDlpMcpServer {
 
       ytDlpProcess.on("error", (error) => {
         reject(new Error(`Failed to start yt-dlp: ${error.message}`));
-      });
-    });
-  }
-
-  private async runWhisperCommand(args: string[]): Promise<{ stdout: string; stderr: string }> {
-    return new Promise((resolve, reject) => {
-      // Use python3 -m whisper instead of direct whisper command for better compatibility
-      const whisperProcess = spawn('python3', ['-m', 'whisper', ...args], {
-        cwd: process.cwd(),
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-
-      let stdout = "";
-      let stderr = "";
-
-      whisperProcess.stdout?.on("data", (data) => {
-        stdout += data.toString();
-      });
-
-      whisperProcess.stderr?.on("data", (data) => {
-        stderr += data.toString();
-      });
-
-      whisperProcess.on("close", (code) => {
-        if (code === 0) {
-          resolve({ stdout, stderr });
-        } else {
-          reject(new Error(`whisper exited with code ${code}: ${stderr}`));
-        }
-      });
-
-      whisperProcess.on("error", (error) => {
-        reject(new Error(`Failed to start whisper: ${error.message}`));
       });
     });
   }
@@ -310,7 +277,7 @@ class YtDlpMcpServer {
   }
 
   private async handleDownloadVideo(args: any) {
-    const { url, format = "best", output_path, extract_audio = false, audio_format = "mp3", transcribe = false, whisper_model = "base", transcribe_language } = args;
+    const { url, format = "best", output_path, extract_audio = false, audio_format = "mp3" } = args;
 
     if (!url || typeof url !== "string") {
       throw new Error("URL is required and must be a string");
@@ -322,12 +289,6 @@ class YtDlpMcpServer {
       commandArgs.push("-o", output_path);
     }
 
-    // Detect if we're downloading audio format
-    const isAudioFormat = extract_audio || 
-                         format === "bestaudio" || 
-                         format === "worstaudio" ||
-                         (typeof format === "string" && format.includes("audio"));
-
     if (extract_audio) {
       commandArgs.push("-x", "--audio-format", audio_format);
     } else {
@@ -338,108 +299,122 @@ class YtDlpMcpServer {
 
     const { stdout, stderr } = await this.runYtDlpCommand(commandArgs);
 
-    let result = `Download completed successfully.\n${stdout || stderr}`;
-
-    // If transcribe is enabled and we're downloading audio, run Whisper
-    if (transcribe && isAudioFormat) {
-      try {
-        // Extract the downloaded file path from yt-dlp output
-        const downloadedFile = this.extractDownloadedFilePath(stdout || stderr);
-        if (downloadedFile) {
-          const transcriptionResult = await this.handleTranscribeAudio({
-            audio_path: downloadedFile,
-            model: whisper_model,
-            language: transcribe_language,
-            output_format: "txt"
-          });
-          result += "\n\nTranscription:\n" + transcriptionResult.content[0].text;
-        }
-      } catch (transcribeError) {
-        result += `\n\nTranscription failed: ${transcribeError instanceof Error ? transcribeError.message : String(transcribeError)}`;
-      }
-    }
-
     return {
       content: [
         {
           type: "text",
-          text: result,
+          text: `Download completed successfully.\n${stdout || stderr}`,
         },
       ],
     };
   }
 
-  private async handleTranscribeAudio(args: any) {
-    const { audio_path, model = "base", language, output_format = "txt", output_path } = args;
+  private async handleListSubtitles(args: any) {
+    const { url } = args;
 
-    if (!audio_path || typeof audio_path !== "string") {
-      throw new Error("audio_path is required and must be a string");
+    if (!url || typeof url !== "string") {
+      throw new Error("URL is required and must be a string");
     }
 
-    if (!existsSync(audio_path)) {
-      throw new Error(`Audio file not found: ${audio_path}`);
+    const commandArgs = [
+      "--list-subs",
+      "--no-download",
+      url
+    ];
+
+    const { stdout, stderr } = await this.runYtDlpCommand(commandArgs);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: stdout || stderr,
+        },
+      ],
+    };
+  }
+
+  private async handleDownloadSubtitles(args: any) {
+    const { url, languages = "en", auto_generated = true, format = "srt" } = args;
+
+    if (!url || typeof url !== "string") {
+      throw new Error("URL is required and must be a string");
     }
 
-    const commandArgs = [audio_path, "--model", model];
+    // Create a temporary directory for subtitle downloads
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-dlp-subs-"));
+    
+    try {
+      const commandArgs = [
+        "--skip-download",
+        "--write-subs",
+        "--sub-format", format,
+        "--sub-langs", languages,
+        "-o", path.join(tempDir, "%(title)s.%(ext)s"),
+      ];
 
-    if (language) {
-      commandArgs.push("--language", language);
-    }
+      // Add auto-generated subtitles flag if requested
+      if (auto_generated) {
+        commandArgs.push("--write-auto-subs");
+      }
 
-    if (output_format && output_format !== "txt") {
-      commandArgs.push("--output_format", output_format);
-    }
+      commandArgs.push(url);
 
-    if (output_path) {
-      commandArgs.push("--output_dir", dirname(output_path));
-    }
+      const { stdout, stderr } = await this.runYtDlpCommand(commandArgs);
 
-    const { stdout, stderr } = await this.runWhisperCommand(commandArgs);
+      // Read all subtitle files from the temp directory
+      const files = await fs.readdir(tempDir);
+      const subtitleFiles = files.filter(f => f.endsWith(`.${format}`));
 
-    // Whisper typically outputs the transcription to stdout or creates files
-    let transcriptionText = stdout;
+      if (subtitleFiles.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `No subtitles found for the specified languages (${languages}).\n\nyt-dlp output:\n${stdout || stderr}`,
+            },
+          ],
+        };
+      }
 
-    // If output_format is txt and no custom output_path, try to read the generated file
-    if (!transcriptionText && output_format === "txt") {
-      const baseFileName = basename(audio_path, extname(audio_path));
-      const transcriptionFile = join(dirname(audio_path), `${baseFileName}.txt`);
+      // Read content of all subtitle files
+      const subtitleContents = await Promise.all(
+        subtitleFiles.map(async (file) => {
+          const filePath = path.join(tempDir, file);
+          const content = await fs.readFile(filePath, "utf-8");
+          return {
+            filename: file,
+            content: content,
+          };
+        })
+      );
+
+      // Format the response
+      let responseText = `Successfully downloaded ${subtitleFiles.length} subtitle file(s):\n\n`;
       
-      if (existsSync(transcriptionFile)) {
-        const fs = await import('fs');
-        transcriptionText = fs.readFileSync(transcriptionFile, 'utf-8');
+      for (const sub of subtitleContents) {
+        responseText += `=== ${sub.filename} ===\n`;
+        responseText += `${sub.content}\n\n`;
+      }
+
+      responseText += `\nyt-dlp output:\n${stdout || stderr}`;
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: responseText,
+          },
+        ],
+      };
+    } finally {
+      // Clean up temporary directory
+      try {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      } catch (error) {
+        console.error("Failed to clean up temp directory:", error);
       }
     }
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: transcriptionText || stderr || "Transcription completed, but no text output found.",
-        },
-      ],
-    };
-  }
-
-  private extractDownloadedFilePath(output: string): string | null {
-    // Parse yt-dlp output to find the downloaded file path
-    const lines = output.split('\n');
-    for (const line of lines) {
-      // Look for patterns like "[download] Destination: filename" or similar
-      if (line.includes('[download]') && (line.includes('Destination:') || line.includes('has already been downloaded'))) {
-        const match = line.match(/[\/\w\-_\.]+\.\w+/);
-        if (match) {
-          return match[0];
-        }
-      }
-      // Also look for final output file mentions
-      if (line.includes('[ExtractAudio]') && line.includes('Destination:')) {
-        const match = line.match(/[\/\w\-_\.]+\.\w+/);
-        if (match) {
-          return match[0];
-        }
-      }
-    }
-    return null;
   }
 
   async run() {
