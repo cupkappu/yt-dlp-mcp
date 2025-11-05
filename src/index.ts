@@ -13,6 +13,9 @@ import { promisify } from "util";
 import { exec as execCallback } from "child_process";
 import { UploadService, UploadConfig } from "./upload-service.js";
 import { resolve } from "path";
+import * as fs from "fs/promises";
+import * as path from "path";
+import * as os from "os";
 
 const exec = promisify(execCallback);
 
@@ -106,6 +109,49 @@ class YtDlpMcpServer {
               required: ["url"],
             },
           },
+          {
+            name: "list_subtitles",
+            description: "List all available subtitles (both manual and auto-generated) for a video",
+            inputSchema: {
+              type: "object",
+              properties: {
+                url: {
+                  type: "string",
+                  description: "Video URL to list subtitles for",
+                },
+              },
+              required: ["url"],
+            },
+          },
+          {
+            name: "download_subtitles",
+            description: "Download subtitles and return the content to the model. Supports both manual and auto-generated subtitles.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                url: {
+                  type: "string",
+                  description: "Video URL to download subtitles from",
+                },
+                languages: {
+                  type: "string",
+                  description: "Comma-separated list of language codes (e.g., 'en,zh,ja') or 'all' for all available languages",
+                  default: "en",
+                },
+                auto_generated: {
+                  type: "boolean",
+                  description: "Whether to download auto-generated subtitles if manual subtitles are not available",
+                  default: true,
+                },
+                format: {
+                  type: "string",
+                  description: "Subtitle format (srt, vtt, ttml, etc.)",
+                  default: "srt",
+                },
+              },
+              required: ["url"],
+            },
+          },
         ],
       };
     });
@@ -122,6 +168,10 @@ class YtDlpMcpServer {
             return await this.handleListFormats(args);
           case "download_video":
             return await this.handleDownloadVideo(args);
+          case "list_subtitles":
+            return await this.handleListSubtitles(args);
+          case "download_subtitles":
+            return await this.handleDownloadSubtitles(args);
           default:
             throw new McpError(
               ErrorCode.MethodNotFound,
@@ -289,6 +339,114 @@ class YtDlpMcpServer {
         },
       ],
     };
+  }
+
+  private async handleListSubtitles(args: any) {
+    const { url } = args;
+
+    if (!url || typeof url !== "string") {
+      throw new Error("URL is required and must be a string");
+    }
+
+    const commandArgs = [
+      "--list-subs",
+      "--no-download",
+      url
+    ];
+
+    const { stdout, stderr } = await this.runYtDlpCommand(commandArgs);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: stdout || stderr,
+        },
+      ],
+    };
+  }
+
+  private async handleDownloadSubtitles(args: any) {
+    const { url, languages = "en", auto_generated = true, format = "srt" } = args;
+
+    if (!url || typeof url !== "string") {
+      throw new Error("URL is required and must be a string");
+    }
+
+    // Create a temporary directory for subtitle downloads
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-dlp-subs-"));
+    
+    try {
+      const commandArgs = [
+        "--skip-download",
+        "--write-subs",
+        "--sub-format", format,
+        "--sub-langs", languages,
+        "-o", path.join(tempDir, "%(title)s.%(ext)s"),
+      ];
+
+      // Add auto-generated subtitles flag if requested
+      if (auto_generated) {
+        commandArgs.push("--write-auto-subs");
+      }
+
+      commandArgs.push(url);
+
+      const { stdout, stderr } = await this.runYtDlpCommand(commandArgs);
+
+      // Read all subtitle files from the temp directory
+      const files = await fs.readdir(tempDir);
+      const subtitleFiles = files.filter(f => f.endsWith(`.${format}`));
+
+      if (subtitleFiles.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `No subtitles found for the specified languages (${languages}).\n\nyt-dlp output:\n${stdout || stderr}`,
+            },
+          ],
+        };
+      }
+
+      // Read content of all subtitle files
+      const subtitleContents = await Promise.all(
+        subtitleFiles.map(async (file) => {
+          const filePath = path.join(tempDir, file);
+          const content = await fs.readFile(filePath, "utf-8");
+          return {
+            filename: file,
+            content: content,
+          };
+        })
+      );
+
+      // Format the response
+      let responseText = `Successfully downloaded ${subtitleFiles.length} subtitle file(s):\n\n`;
+      
+      for (const sub of subtitleContents) {
+        responseText += `=== ${sub.filename} ===\n`;
+        responseText += `${sub.content}\n\n`;
+      }
+
+      responseText += `\nyt-dlp output:\n${stdout || stderr}`;
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: responseText,
+          },
+        ],
+      };
+    } finally {
+      // Clean up temporary directory
+      try {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      } catch (error) {
+        console.error("Failed to clean up temp directory:", error);
+      }
+    }
   }
 
   async run() {

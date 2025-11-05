@@ -45,7 +45,13 @@ docker run --rm -i \
 
 - **extract_info**: Extract video information without downloading
 - **list_formats**: List available video formats and qualities
+<<<<<<< HEAD
 - **download_video**: Download videos with customizable options and automatic upload to WebDAV or S3
+=======
+- **download_video**: Download videos with customizable options
+- **list_subtitles**: List all available subtitles (manual and auto-generated)
+- **download_subtitles**: Download subtitles and return content to the model
+>>>>>>> feat/audio_transcript
 
 ## 🤖 Using with MCP Clients
 
@@ -354,6 +360,67 @@ S3_BUCKET=your-bucket
 S3_ACCESS_KEY_ID=your-access-key
 S3_SECRET_ACCESS_KEY=your-secret-key
 ```
+
+### list_subtitles
+List all available subtitles (both manual and auto-generated) for a video.
+
+**Parameters:**
+- `url` (string, required): Video URL to list subtitles for
+
+**Example Response:**
+```
+Available subtitles for dQw4w9WgXcQ:
+Language       Name
+en             English
+ja             Japanese
+zh-Hans        Chinese (Simplified)
+...
+
+Available automatic captions:
+Language       Name
+en             English
+de             German
+...
+```
+
+### download_subtitles
+Download subtitles and return the subtitle content to the model. Supports both manual and auto-generated subtitles.
+
+**Parameters:**
+- `url` (string, required): Video URL to download subtitles from
+- `languages` (string, optional): Comma-separated list of language codes (e.g., 'en,zh,ja') or 'all' for all available languages (default: 'en')
+- `auto_generated` (boolean, optional): Whether to download auto-generated subtitles if manual subtitles are not available (default: true)
+- `format` (string, optional): Subtitle format - srt, vtt, ttml, etc. (default: 'srt')
+
+**Example Usage:**
+```javascript
+// Download English subtitles only
+{
+  "url": "https://www.youtube.com/watch?v=VIDEO_ID",
+  "languages": "en",
+  "auto_generated": true,
+  "format": "srt"
+}
+
+// Download multiple languages
+{
+  "url": "https://www.youtube.com/watch?v=VIDEO_ID",
+  "languages": "en,zh,ja",
+  "auto_generated": true,
+  "format": "srt"
+}
+
+// Download all available subtitles
+{
+  "url": "https://www.youtube.com/watch?v=VIDEO_ID",
+  "languages": "all",
+  "auto_generated": true,
+  "format": "vtt"
+}
+```
+
+**Response:**
+The tool returns the complete subtitle content in the specified format, ready for the model to process and analyze.
 
 ## Docker Compose Configuration
 
